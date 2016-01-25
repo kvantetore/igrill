@@ -1,8 +1,12 @@
+#!/usr/bin/env python
+
 # bluetooth low energy scan
 from bluetooth.ble import GATTRequester, DiscoveryService
+
 from Crypto.Cipher import AES
 import random
 
+import time
 
 DEVICE_NAME = "iGrill Mini"
 HANDLE_APP_CHALLENGE = 0x0024
@@ -10,6 +14,9 @@ HANDLE_DEVICE_CHALLENGE = 0x0026
 HANDLE_DEVICE_RESPONSE = 0x0028
 
 HANDLE_READ_TEMPERATURE = 0x0034
+HANDLE_NOTIFICATION_TEMPERATURE = 0x0034
+
+HANDLE_BATTERY_LEVEL = 0x0042
 
 
 def encrypt(key, data):
@@ -34,49 +41,72 @@ def find_device_address():
                 return address
 
 
-def authenticate(periheral):
-    print("Authenticating...")
-    #encryption key used by igrill mini
-    key = "".join([chr((256 + x) % 256) for x in [-19, 94, 48, -114, -117, -52, -111, 19, 48, 108,
-                                    -44, 104, 84, 21, 62, -35]])
+class IDeviceRequester(GATTRequester):
+    def __init__(self, address):
+        """
+        Connects to the device given by address performing necessary authentication
+        """
+        # connect with pairing, otherwise the device refuses to authenticate
+        super(IDeviceRequester, self).__init__(address, False)
+        self.connect(security_level="medium")
 
-    #send app challenge
-    challenge = str(bytearray([(random.randint(0, 255)) for i in range(8)] + [0] * 8))
-    periheral.write_by_handle(HANDLE_APP_CHALLENGE, challenge)
+        # authenticate with idevices custom challenge/response protocol
+        if not self.authenticate():
+            raise RuntimeError("Unable to authenticate with device")
 
-    #read device challenge
-    encrypted_device_challenge = periheral.read_by_handle(HANDLE_DEVICE_CHALLENGE)[0]
-    print("encrypted device challenge:", str(encrypted_device_challenge).encode("hex"))
-    device_challenge = decrypt(key, encrypted_device_challenge)
-    print("decrypted device challenge:", str(encrypted_device_challenge).encode("hex"))
+    def authenticate(self):
+        print "Authenticating..."
+        # encryption key used by igrill mini
+        key = "".join([chr((256 + x) % 256) for x in [-19, 94, 48, -114, -117, -52, -111, 19, 48, 108,
+                                                      -44, 104, 84, 21, 62, -35]])
 
-    #verify device challenge
-    if device_challenge[:8] != challenge[:8]:
-        return False
+        # send app challenge
+        challenge = str(bytearray([(random.randint(0, 255)) for i in range(8)] + [0] * 8))
+        self.write_by_handle(HANDLE_APP_CHALLENGE, challenge)
 
-    #send device response
-    device_response = chr(0) * 8 + device_challenge[8:]
-    print("device response: ", str(device_response).encode("hex"))
-    encrypted_device_response = encrypt(key, device_response)
-    periheral.write_by_handle(HANDLE_DEVICE_RESPONSE, encrypted_device_response)
+        # read device challenge
+        encrypted_device_challenge = self.read_by_handle(HANDLE_DEVICE_CHALLENGE)[0]
+        print "encrypted device challenge:", str(encrypted_device_challenge).encode("hex")
+        device_challenge = decrypt(key, encrypted_device_challenge)
+        print "decrypted device challenge:", str(encrypted_device_challenge).encode("hex")
 
-    print("Authenticated")
+        # verify device challenge
+        if device_challenge[:8] != challenge[:8]:
+            return False
 
-    return True
+        # send device response
+        device_response = chr(0) * 8 + device_challenge[8:]
+        print "device response: ", str(device_response).encode("hex")
+        encrypted_device_response = encrypt(key, device_response)
+        self.write_by_handle(HANDLE_DEVICE_RESPONSE, encrypted_device_response)
+
+        print("Authenticated")
+
+        return True
+
+    def on_notification(self, handle, data):
+        print "Got notification ", handle, ", ", str(data).encode("hex")
+        print "Temperature: ", ord(data[3])
 
 
-address = find_device_address()
-peripheral = GATTRequester(address, False)
-peripheral.connect(security_level="medium")
+if __name__ == "__main__":
+    while True:
+        try:
+            #find igrill device
+            print "Scanning for devices..."
+            address = find_device_address()
+            print "Found ", address
+            peripheral = IDeviceRequester(address)
 
-if not authenticate(peripheral):
-    print("Authentication Failed")
-    exit(-1)
+            # avoid subscribing to notification. it only crashes
+            peripheral.write_by_handle(0x0035, '\1\0')
 
-import time
-
-while True:
-    temp_data = peripheral.read_by_handle(HANDLE_READ_TEMPERATURE)[0]
-    temp = ord(temp_data[0])
-    print("Temp:", temp)
-    time.sleep(1)
+            #poll battery level in order to detect device disconnection
+            while True:
+                battery_data = peripheral.read_by_handle(HANDLE_BATTERY_LEVEL)[0]
+                battery_level = ord(battery_data[0])
+                print "Battery:", battery_level
+                time.sleep(10)
+        except RuntimeError as ex:
+            print "Error:", ex, ", reconnecting"
+            peripheral = None
