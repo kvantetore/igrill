@@ -1,0 +1,2 @@
+bluepy==0.9.11
+pycrypto==2.6.1

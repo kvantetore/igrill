@@ -1,22 +1,31 @@
 #!/usr/bin/env python
 
-# bluetooth low energy scan
-from bluetooth.ble import GATTRequester, DiscoveryService
-
+import bluepy.btle as btle
 from Crypto.Cipher import AES
 import random
 
 import time
 
 DEVICE_NAME = "iGrill Mini"
-HANDLE_APP_CHALLENGE = 0x0024
-HANDLE_DEVICE_CHALLENGE = 0x0026
-HANDLE_DEVICE_RESPONSE = 0x0028
 
-HANDLE_READ_TEMPERATURE = 0x0034
-HANDLE_NOTIFICATION_TEMPERATURE = 0x0034
+class UUIDS:
+    FIRMWARE_VERSION   = btle.UUID("64ac0001-4a4b-4b58-9f37-94d3c52ffdf7")
 
-HANDLE_BATTERY_LEVEL = 0x0042
+    BATTERY_LEVEL      = btle.UUID(0x2a19)
+
+    APP_CHALLENGE      = btle.UUID("64ac0002-4a4b-4b58-9f37-94d3c52ffdf7")
+    DEVICE_CHALLENGE   = btle.UUID("64ac0003-4a4b-4b58-9f37-94d3c52ffdf7")
+    DEVICE_RESPONSE    = btle.UUID("64ac0004-4a4b-4b58-9f37-94d3c52ffdf7")
+
+    CONFIG             = btle.UUID("06ef0002-2e06-4b79-9e33-fce2c42805ec")
+    PROBE1_TEMPERATURE = btle.UUID("06ef0002-2e06-4b79-9e33-fce2c42805ec")
+    PROBE1_THRESHOLD   = btle.UUID("06ef0003-2e06-4b79-9e33-fce2c42805ec")
+    PROBE2_TEMPERATURE = btle.UUID("06ef0004-2e06-4b79-9e33-fce2c42805ec")
+    PROBE2_THRESHOLD   = btle.UUID("06ef0005-2e06-4b79-9e33-fce2c42805ec")
+    PROBE3_TEMPERATURE = btle.UUID("06ef0006-2e06-4b79-9e33-fce2c42805ec")
+    PROBE3_THRESHOLD   = btle.UUID("06ef0007-2e06-4b79-9e33-fce2c42805ec")
+    PROBE4_TEMPERATURE = btle.UUID("06ef0008-2e06-4b79-9e33-fce2c42805ec")
+    PROBE4_THRESHOLD   = btle.UUID("06ef0009-2e06-4b79-9e33-fce2c42805ec")
 
 
 def encrypt(key, data):
@@ -27,66 +36,88 @@ def decrypt(key, data):
     return AES.new(key).decrypt(data)
 
 
-def find_device_address():
-    service = DiscoveryService()
+def find_peripheral():
+    service = btle.Scanner()
     while True:
-        devices = service.discover(2)
-        for address, name in devices.items():
-            periheral = GATTRequester(address)
-            name2 = periheral.read_by_uuid("00002a00-0000-1000-8000-00805f9b34fb")[0]
+        scanresults = service.scan(2)
+        for scanresult in scanresults:
+            name = scanresult.getValueText(8)
+            print "Found ", scanresult.addr, name
 
-            print("Found ", address, name, name2)
-
-            if name2.startswith("iGrill Mini"):
-                return address
+            if name == "iGrill_mini":
+                return IGrillMiniPeripheral(scanresult.addr)
 
 
-class IDeviceRequester(GATTRequester):
+class IDevicePeripheral(btle.Peripheral):
+    encryption_key = None
+
     def __init__(self, address):
         """
         Connects to the device given by address performing necessary authentication
         """
-        # connect with pairing, otherwise the device refuses to authenticate
-        super(IDeviceRequester, self).__init__(address, False)
-        self.connect(security_level="medium")
+        btle.Peripheral.__init__(self, address)
 
-        # authenticate with idevices custom challenge/response protocol
+        # iDevice devices require bonding. I don't think this will give us bonding
+        # if no bonding exists, so please use bluetoothctl to create a bond first
+        self.setSecurityLevel("medium")
+
+        # enumerate all characteristics so we can look up handles from uuids
+        self.characteristics = self.getCharacteristics()
+
+        # authenticate with iDevices custom challenge/response protocol
         if not self.authenticate():
             raise RuntimeError("Unable to authenticate with device")
 
+    def characteristic(self, uuid):
+        """
+        Returns the characteristic for a given uuid.
+        """
+        for c in self.characteristics:
+            if c.uuid == uuid:
+                return c
+
     def authenticate(self):
+        """
+        Performs iDevices challenge/response handshake. Returns if handshake succeeded
+
+        """
         print "Authenticating..."
         # encryption key used by igrill mini
-        key = "".join([chr((256 + x) % 256) for x in [-19, 94, 48, -114, -117, -52, -111, 19, 48, 108,
-                                                      -44, 104, 84, 21, 62, -35]])
+        key = "".join([chr((256 + x) % 256) for x in self.encryption_key])
 
         # send app challenge
         challenge = str(bytearray([(random.randint(0, 255)) for i in range(8)] + [0] * 8))
-        self.write_by_handle(HANDLE_APP_CHALLENGE, challenge)
+        self.characteristic(UUIDS.APP_CHALLENGE).write(challenge, True)
 
         # read device challenge
-        encrypted_device_challenge = self.read_by_handle(HANDLE_DEVICE_CHALLENGE)[0]
+        encrypted_device_challenge = self.characteristic(UUIDS.DEVICE_CHALLENGE).read()
         print "encrypted device challenge:", str(encrypted_device_challenge).encode("hex")
         device_challenge = decrypt(key, encrypted_device_challenge)
-        print "decrypted device challenge:", str(encrypted_device_challenge).encode("hex")
+        print "decrypted device challenge:", str(device_challenge).encode("hex")
 
         # verify device challenge
         if device_challenge[:8] != challenge[:8]:
+            print "Invalid device challenge"
             return False
 
         # send device response
         device_response = chr(0) * 8 + device_challenge[8:]
         print "device response: ", str(device_response).encode("hex")
         encrypted_device_response = encrypt(key, device_response)
-        self.write_by_handle(HANDLE_DEVICE_RESPONSE, encrypted_device_response)
+        self.characteristic(UUIDS.DEVICE_RESPONSE).write(encrypted_device_response, True)
 
         print("Authenticated")
 
         return True
 
-    def on_notification(self, handle, data):
-        print "Got notification ", handle, ", ", str(data).encode("hex")
-        print "Temperature: ", ord(data[3])
+
+class IGrillMiniPeripheral(IDevicePeripheral):
+    """
+    Specialization of iDevice peripheral for the iGrill Mini (sets the correct encryption key
+    """
+
+    # encryption key for the iGrill Mini
+    encryption_key = [-19, 94, 48, -114, -117, -52, -111, 19, 48, 108, -44, 104, 84, 21, 62, -35]
 
 
 if __name__ == "__main__":
@@ -94,19 +125,28 @@ if __name__ == "__main__":
         try:
             #find igrill device
             print "Scanning for devices..."
-            address = find_device_address()
-            print "Found ", address
-            peripheral = IDeviceRequester(address)
+            peripheral = find_peripheral()
+            print "Found ", peripheral.addr
 
             # avoid subscribing to notification. it only crashes
-            peripheral.write_by_handle(0x0035, '\1\0')
+            #peripheral.write_by_handle(0x0035, '\1\0')
+
+            battery_char = peripheral.characteristic(UUIDS.BATTERY_LEVEL)
+            temp_char = peripheral.characteristic(UUIDS.PROBE1_TEMPERATURE)
 
             #poll battery level in order to detect device disconnection
             while True:
-                battery_data = peripheral.read_by_handle(HANDLE_BATTERY_LEVEL)[0]
+                battery_data = battery_char.read()
                 battery_level = ord(battery_data[0])
+
+                temp_data = temp_char.read()
+                temp = ord(temp_data[0])
+
                 print "Battery:", battery_level
-                time.sleep(10)
+                print "Temp:", temp
+
+                time.sleep(1)
+
         except RuntimeError as ex:
             print "Error:", ex, ", reconnecting"
             peripheral = None
