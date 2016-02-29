@@ -8,18 +8,14 @@ from tokencube import TokenCubeHandler
 
 device_settings = {
     "d4:81:ca:03:ab:80": {
-        "name": "iGrill Mini",
-        "tags": {
-            "addr": "d4:81:ca:03:ab:80",
-            "type": "kitchen"
-        }
+        "device": "iGrill Mini",
+        "addr": "d4:81:ca:03:ab:80",
+        "type": "kitchen"
     },
     "dc:00:62:95:62:67": {
-        "name": "TokenCube 1",
-        "tags": {
-            "addr": "dc:00:62:95:62:67",
-            "type": "ambient"
-        }
+        "device": "TokenCube 1",
+        "addr": "dc:00:62:95:62:67",
+        "type": "ambient"
     }
 }
 

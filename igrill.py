@@ -48,18 +48,17 @@ class IGrillHandler(object):
             settings = self.device_settings.get(dev.addr)
             if settings == None:
                 settings = {
-                    "name": "iGrill " + dev.addr,
-                    "tags": {
-                        "type": "kitchen",
-                        "addr": dev.addr,
-                    }
+                    "device": "iGrill " + dev.addr,
+                    "type": "kitchen",
+                    "addr": dev.addr,
                 }
 
             temp = dev.read_temperature()
-            persistence.save_temperature(temp, settings["name"], **settings["tags"])
+            fields = {"temperature": temp}
+            persistence.save("sensordata", fields, **settings)
 
             battery = dev.read_battery()
-            persistence.save_temperature(battery, settings["name"], **settings["tags"])
+            persistence.save_temperature(battery, **settings)
 
 
 class IDevicePeripheral(btle.Peripheral):

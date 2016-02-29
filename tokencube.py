@@ -62,21 +62,26 @@ class TokenCubeHandler(object):
             settings = self.device_settings.get(addr, None)
             if settings is None:
                 settings = {
-                    "name": "TokenCube " + addr,
-                    "tags": {
-                        "addr": addr,
-                        "type": "ambient"
-                    }
+                    "device": "TokenCube " + addr,
+                    "addr": addr,
+                    "type": "ambient"
                 }
 
-            device_name = settings["name"]
-            tags = settings["tags"]
+            #save
+            fields = {}
+            for field_name in ["temperature", "humidity", "pressure"]:
+                if field_name in stats:
+                    fields[field_name] = stats[field_name]
+            if len(fields) > 0:
+                persistence.save("sensordata", fields, settings)
 
-            if "temperature" in stats:
-                persistence.save_temperature(stats["temperature"], device_name, **tags)
+                if "battery" in stats:
+                    persistence.save_battery_level(stats["battery"], **settings)
 
-            if "battery" in stats:
-                persistence.save_battery_level(stats["battery"], device_name, **tags)
+        #reset device stats
+        self.devices = {}
+
+
 
 
 def get_float(data, offset, length):
