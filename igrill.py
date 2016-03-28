@@ -40,25 +40,36 @@ class IGrillHandler(object):
                 return
 
         #add dev
-        dev = IGrillMiniPeripheral(d.addr)
+        dev = IGrillMiniPeripheral(scanEntry.addr)
         self.devices.append(dev)
 
     def persist_stats(self, persistence):
-        for dev in self.devices:
-            settings = self.device_settings.get(dev.addr)
+        for dev in list(self.devices):
+            settings = self.device_settings.get(dev.deviceAddr)
+            print "dev: ", dev, ", settings: ", settings
             if settings == None:
                 settings = {
-                    "device": "iGrill " + dev.addr,
+                    "device": "iGrill " + dev.deviceAddr,
                     "type": "kitchen",
                     "addr": dev.addr,
                 }
 
-            temp = dev.read_temperature()
-            fields = {"temperature": temp}
-            persistence.save("sensordata", fields, **settings)
+            #read data from device
+            try:
+                temp = dev.read_temperature()
+                battery = dev.read_battery()
+            except Exception as ex:
+                print "Error reading from ", dev.deviceAddr, ": ", ex, "removing device"
+                self.devices.remove(dev)
+                continue
 
-            battery = dev.read_battery()
-            persistence.save_temperature(battery, **settings)
+            #persist data
+            try: 
+                fields = {"temperature": temp}
+                persistence.save("sensordata", fields, settings)
+                persistence.save_battery_level(battery, **settings)
+            except Exception as ex:
+                print "Error persisting stats,", ex, ", retrying next time"
 
 
 class IDevicePeripheral(btle.Peripheral):
